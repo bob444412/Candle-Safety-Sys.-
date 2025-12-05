@@ -1,0 +1,119 @@
+import board
+import RPi.GPIO as GPIO
+from PIL import Image, ImageDraw, ImageFont
+import adafruit_ssd1306
+from time import sleep, time
+from gpiozero import Buzzer, LED, Button
+
+# GPIO and OLED Display Setup
+channel = 21
+GPIO.setmode(GPIO.BCM)   # Ensure BCM mode is set (correct for gpiozero also)
+GPIO.setup(channel, GPIO.IN)  # Set up GPIO pin for flame sensor input (GPIO 21)
+
+i2c = board.I2C()
+disp = adafruit_ssd1306.SSD1306_I2C(128, 64, i2c, addr=0x3C)
+
+# Fonts
+message_font = ImageFont.truetype('FreeSans.ttf', 15)
+timer_font = ImageFont.truetype('FreeSans.ttf', 49)
+
+# Create an image for the OLED display
+width = disp.width
+height = disp.height
+image = Image.new('1', (width, height))
+draw = ImageDraw.Draw(image)
+
+# Buzzer, LED, Fan, and Squid Button Setup
+buzzer = Buzzer(17)  # Buzzer connected to GPIO pin 17
+led = LED(24)        # LED connected to GPIO pin 24
+fan = LED(18)        # Fan connected to GPIO pin 18
+button = Button(25)  # Button connected to GPIO pin 25
+
+# Display message function
+def display_message(msg):
+    draw.rectangle((0, 0, width, height), outline=0, fill=0)
+    draw.text((10, 20), msg, font=message_font, fill=255)
+    disp.image(image)
+    disp.show()
+
+# Display timer countdown on OLED
+def display_timer(minutes, seconds):
+    draw.rectangle((0, 0, width, height), outline=0, fill=0)
+    draw.text((5, 10), f"{minutes:02}:{seconds:02}", font=timer_font, fill=255)
+    text_width, text_height = draw.textsize(str(minutes), font=timer_font)
+    draw.text(((width - text_width) // 2, (height - text_height) // 2), '', 15)
+    disp.image(image)
+    disp.show()
+
+# Flame detection and countdown logic
+countdown_time = 10  # 1-minute countdown
+timer_running = False
+end_time = None
+
+# Flame detection callback
+def flame_detected(channel):
+    global timer_running, end_time
+    print("Flame detected — Starting countdown")
+    timer_running = True
+    end_time = time() + countdown_time
+
+# Add event detection for the flame sensor pin
+GPIO.add_event_detect(channel, GPIO.RISING, callback=flame_detected)
+
+# Alarm handler (activation logic)
+def activate_alarm():
+    print("Alarm Activated: Buzzer and LED ON")
+    display_message("Alarm Turned On")
+
+    if button.is_pressed:
+        buzzer.off()
+        led.off()
+        print("Button pressed: Alarm Turned OFF")
+        display_message("Alarm Turned Off")
+        return
+
+    buzzer.on()
+    led.on()
+
+    sleep(5)
+
+    buzzer.off()
+    led.off()
+
+# Function to activate the fan for 20 seconds if button not pressed
+def activate_fan():
+    print("Activating fan for 20 seconds")
+    display_message("Fan Time")
+    fan.on()
+    sleep(20)
+    fan.off()
+
+# Main loop
+try:
+    while True:
+        if timer_running:
+            remaining_time = int(end_time - time())
+            if remaining_time <= 0:
+                print("Alarm Activated")
+                display_message("Alarm Activated")
+                activate_alarm()
+
+                if not button.is_pressed:
+                    activate_fan()
+
+                timer_running = False
+            else:
+                minutes = remaining_time // 60
+                seconds = remaining_time % 60
+                display_timer(minutes, seconds)
+
+        else:
+            display_message("Waiting for Flame")
+            sleep(0.5)
+
+finally:
+    # Cleanup GPIO (important)
+    GPIO.cleanup()
+    fan.off()
+    buzzer.close()
+    fan.close()
